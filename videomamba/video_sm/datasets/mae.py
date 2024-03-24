@@ -148,6 +148,7 @@ class VideoMAE(torch.utils.data.Dataset):
                             video_name = '{}.{}'.format(directory, self.video_ext)
 
                         video_name = os.path.join(self.prefix, video_name)
+                        # print(f"video_name: {video_name}")
                         if 's3://' in video_name:
                             video_bytes = self.client.get(video_name)
                             decord_vr = VideoReader(io.BytesIO(video_bytes),
@@ -156,6 +157,7 @@ class VideoMAE(torch.utils.data.Dataset):
                         else:
                             decord_vr = decord.VideoReader(video_name, num_threads=1, ctx=cpu(0))
                         duration = len(decord_vr)
+                        # print(f"duration, decord_vr: {duration}")
                         
                     segment_indices, skip_offsets = self._sample_train_indices(duration)
                     images = self._video_TSN_decord_batch_loader(directory, decord_vr, duration, segment_indices, skip_offsets)
@@ -215,12 +217,14 @@ class VideoMAE(torch.utils.data.Dataset):
                     clip_path = os.path.join(line_info[0])
                     target = int(line_info[1])
                     item = (clip_path, target)
+                    # print(f"using decord, clip_path: {clip_path}")
                 else:
                     # line format: video_path, video_duration, video_label
                     clip_path = os.path.join(line_info[0])
                     total_frame = int(line_info[1])
                     target = int(line_info[2])
                     item = (clip_path, total_frame, target)
+                    # print(f"not using decord, clip_path: {clip_path}")
                 clips.append(item)
         return clips
 
