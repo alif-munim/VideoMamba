@@ -164,7 +164,7 @@ def get_args():
     parser.add_argument('--data_set', default='Kinetics', choices=[
         'Kinetics', 'Kinetics_sparse', 
         'SSV2', 'UCF101', 'HMDB51', 'image_folder',
-        'mitv1_sparse', 'LVU', 'COIN', 'Breakfast'
+        'mitv1_sparse', 'LVU', 'COIN', 'Breakfast', 'ECHO'
         ], type=str, help='dataset')
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')

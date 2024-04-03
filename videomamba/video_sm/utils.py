@@ -518,7 +518,9 @@ def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, mode
 
         if args.resume:
             checkpoint = torch.load(args.resume, map_location='cpu')
-            model_without_ddp.load_state_dict(checkpoint['model'])
+            # print(f"checkpoint keys: {checkpoint.keys()}")
+            model_without_ddp.load_state_dict(checkpoint['model']) # Uncomment this line if auto resuming from regular masked pt checkpoint
+            # model_without_ddp.load_state_dict(checkpoint) # Uncomment this line if loading K400 masked pt checkpoint
             print("Resume checkpoint %s" % args.resume)
             if 'optimizer' in checkpoint and 'epoch' in checkpoint:
                 optimizer.load_state_dict(checkpoint['optimizer'])

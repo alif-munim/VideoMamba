@@ -3,6 +3,8 @@
 *.pth
 *.csv
 *mask_pt*
+events.out*
+log.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

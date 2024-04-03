@@ -11,6 +11,7 @@ from .kinetics import VideoClsDataset
 from .kinetics_sparse import VideoClsDataset_sparse
 from .ssv2 import SSVideoClsDataset, SSRawFrameClsDataset
 from .lvu import LVU
+from .echo import ECHO
 
 
 class DataAugmentationForVideoMAE(object):
@@ -267,6 +268,46 @@ def build_dataset(is_train, test_mode, args):
                 nb_classes = 9
             else:
                 nb_classes = -1
+                
+    elif args.data_set in [
+            'ECHO'
+        ]:
+        mode = None
+        anno_path = None
+        if is_train is True:
+            mode = 'train'
+            anno_path = os.path.join(args.data_path, 'train.csv')
+        elif test_mode is True:
+            mode = 'test'
+            anno_path = os.path.join(args.data_path, 'test.csv') 
+        else:  
+            mode = 'validation'
+            anno_path = os.path.join(args.data_path, 'val.csv') 
+
+        func = LVU
+
+        dataset = LVU(
+            anno_path=anno_path,
+            prefix=args.prefix,
+            split=args.split,
+            mode=mode,
+            clip_len=args.num_frames,
+            frame_sample_rate=args.sampling_rate,
+            num_segment=1,
+            test_num_segment=args.test_num_segment,
+            test_num_crop=args.test_num_crop,
+            num_crop=1 if not test_mode else 3,
+            keep_aspect_ratio=True,
+            crop_size=args.input_size,
+            short_side_size=args.short_side_size,
+            new_height=256,
+            new_width=320,
+            args=args,
+            trimmed=args.trimmed,
+            time_stride=args.time_stride,
+        )
+        
+        nb_classes = 1
 
     else:
         print(f'Wrong: {args.data_set}')

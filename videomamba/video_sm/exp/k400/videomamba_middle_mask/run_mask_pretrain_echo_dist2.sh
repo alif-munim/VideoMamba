@@ -1,13 +1,24 @@
 export MASTER_PORT=$((12000 + $RANDOM % 20000))
 export OMP_NUM_THREADS=1
 
-JOB_NAME='videomamba_middle_mask_echo_pt_f8_res224'
+JOB_NAME='videomamba_middle_mask_echo_pt_f8_res224_dist'
 OUTPUT_DIR="$(dirname $0)/$JOB_NAME"
 LOG_DIR="./logs/${JOB_NAME}"
 PREFIX='/scratch/alif/VideoMamba/full_resized_echo_data'
-DATA_PATH='/scratch/alif/VideoMamba/ef_900.csv'
+DATA_PATH='/scratch/alif/VideoMamba/videomamba_echo_settings.csv'
 
-python -u run_videomamba_pretraining.py \
+# PARTITION='v100l'
+GPUS=4
+GPUS_PER_NODE=4
+CPUS_PER_TASK=8
+
+srun --job-name=${JOB_NAME} \
+    --gres=gpu:${GPUS_PER_NODE} \
+    --ntasks=${GPUS} \
+    --ntasks-per-node=${GPUS_PER_NODE} \
+    --cpus-per-task=${CPUS_PER_TASK} \
+    --output=${LOG_DIR}/%x_%j.out \  # %x is the job name, %j is the job ID
+    python -u run_videomamba_pretraining.py \
     --data_path ${DATA_PATH} \
     --prefix ${PREFIX} \
     --num_sample 1 \
