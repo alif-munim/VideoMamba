@@ -12,6 +12,7 @@ from .kinetics_sparse import VideoClsDataset_sparse
 from .ssv2 import SSVideoClsDataset, SSRawFrameClsDataset
 from .lvu import LVU
 from .echo import ECHO
+from .multi_echo import MULTI_ECHO
 
 
 class DataAugmentationForVideoMAE(object):
@@ -284,9 +285,9 @@ def build_dataset(is_train, test_mode, args):
             mode = 'validation'
             anno_path = os.path.join(args.data_path, 'val.csv') 
 
-        func = LVU
+        func = ECHO
 
-        dataset = LVU(
+        dataset = ECHO(
             anno_path=anno_path,
             prefix=args.prefix,
             split=args.split,

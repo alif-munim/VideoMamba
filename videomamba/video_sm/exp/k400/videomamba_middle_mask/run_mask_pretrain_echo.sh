@@ -1,12 +1,13 @@
 export MASTER_PORT=$((12000 + $RANDOM % 20000))
 export OMP_NUM_THREADS=1
 
-JOB_NAME='videomamba_middle_mask_echo_pt_f8_res224'
+JOB_NAME='videomamba_middle_mask_echo_pt_f32_res224'
 OUTPUT_DIR="$(dirname $0)/$JOB_NAME"
 LOG_DIR="./logs/${JOB_NAME}"
 PREFIX='/scratch/alif/VideoMamba/full_resized_echo_data'
-DATA_PATH='/scratch/alif/VideoMamba/ef_900.csv'
+DATA_PATH='/scratch/alif/VideoMamba/videomamba_echo_settings.csv'
 
+# num_segments must match num_frames (?)
 python -u run_videomamba_pretraining.py \
     --data_path ${DATA_PATH} \
     --prefix ${PREFIX} \
@@ -30,9 +31,9 @@ python -u run_videomamba_pretraining.py \
     --tubelet_size 1 \
     --lr 1.5e-4 \
     --drop_path 0.4 \
-    --batch_size 64 \
-    --num_segments 8 \
-    --num_frames 8 \
+    --batch_size 16 \
+    --num_segments 64 \
+    --num_frames 64 \
     --sampling_rate 1 \
     --num_workers 12 \
     --opt adamw \
