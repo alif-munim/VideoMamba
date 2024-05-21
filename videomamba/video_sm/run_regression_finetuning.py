@@ -210,6 +210,8 @@ def get_args():
     parser.add_argument('--enable_deepspeed', action='store_true', default=False)
     parser.add_argument('--bf16', default=False, action='store_true')
 
+    parser.add_argument('--force_single_gpu', action='store_true', default=False)
+
     known_args, _ = parser.parse_known_args()
 
     if known_args.enable_deepspeed:
@@ -271,6 +273,8 @@ def main(args, ds_init):
             dataset_test, num_replicas=num_tasks, rank=global_rank, shuffle=False)
     else:
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+        if dataset_test is not None:
+            sampler_test = torch.utils.data.SequentialSampler(dataset_test)
 
     if global_rank == 0 and args.log_dir is not None:
         os.makedirs(args.log_dir, exist_ok=True)

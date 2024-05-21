@@ -5,8 +5,8 @@ from collections import OrderedDict
 import torch
 from torch import nn
 
-
-MODEL_PATH = '/scratch/alif/VideoMamba/videomamba/video_sm/models'
+# MODEL_PATH = '/scratch/alif/VideoMamba/videomamba/video_sm/models'
+MODEL_PATH = '/cluster/home/t115318uhn/VideoMamba/videomamba/video_sm/models' 
 _MODELS = {
     # extracted from OpenAI, see extract_clip
     "ViT-B/16": os.path.join(MODEL_PATH, "vit_b16.pth"),

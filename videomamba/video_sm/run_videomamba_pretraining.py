@@ -166,12 +166,29 @@ def get_args():
 
 def get_model(args):
     print(f"Creating model: {args.model}")
+    # train from scratch
+    # model = create_model(
+    #     args.model,
+    #     pretrained=False,
+    #     drop_path_rate=args.drop_path,
+    #     use_checkpoint=args.use_checkpoint,
+    #     checkpoint_num=args.checkpoint_num,
+    #     clip_decoder_embed_dim=args.clip_decoder_embed_dim,
+    #     clip_output_dim=args.clip_output_dim,
+    #     clip_norm_type=args.clip_norm_type,
+    #     num_frames=args.num_frames,
+    #     kernel_size=args.tubelet_size,
+    #     clip_return_layer=args.clip_return_layer,
+    #     clip_student_return_interval=args.clip_student_return_interval
+    # )
+
+    # start from pretrained
     model = create_model(
         args.model,
         pretrained=False,
+        use_checkpoint=True,
+        checkpoint_path='/cluster/home/t115318uhn/VideoMamba/videomamba/video_sm/models/videomamba_m16_k400_mask_pt_f8_res224.pth',
         drop_path_rate=args.drop_path,
-        use_checkpoint=args.use_checkpoint,
-        checkpoint_num=args.checkpoint_num,
         clip_decoder_embed_dim=args.clip_decoder_embed_dim,
         clip_output_dim=args.clip_output_dim,
         clip_norm_type=args.clip_norm_type,
