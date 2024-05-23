@@ -1,3 +1,7 @@
+# Setup
+mamba/
+causal-conv1d/
+
 # Echo specific
 *data/
 *.pth
