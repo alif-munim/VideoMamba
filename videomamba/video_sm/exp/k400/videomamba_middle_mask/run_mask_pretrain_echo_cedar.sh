@@ -8,7 +8,7 @@ PREFIX='/scratch/alif/VideoMamba/full_resized_echo_data'
 DATA_PATH='/scratch/alif/VideoMamba/videomamba_echo_settings.csv'
 
 # num_segments must match num_frames (?)
-python -u run_videomamba_pretraining.py \
+python -u run_videomamba_pretraining_cedar.py \
     --data_path ${DATA_PATH} \
     --prefix ${PREFIX} \
     --num_sample 1 \

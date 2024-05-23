@@ -3,6 +3,9 @@ mamba/
 causal-conv1d/
 
 # Echo specific
+logs/
+echo_grids/
+echo_grids_448/
 *data/
 *.pth
 *.csv
