@@ -1,0 +1,7 @@
+--2024-05-09 14:44:02--  https://developer.download.nvidia.com/compute/cuda/11.4.2/local_installers/cuda_11.4.2_470.42.01_linux.run
+Resolving developer.download.nvidia.com (developer.download.nvidia.com)... 152.195.19.142
+Connecting to developer.download.nvidia.com (developer.download.nvidia.com)|152.195.19.142|:443... failed: Connection timed out.
+Retrying.
+
+--2024-05-09 14:46:11--  (try: 2)  https://developer.download.nvidia.com/compute/cuda/11.4.2/local_installers/cuda_11.4.2_470.42.01_linux.run
+Connecting to developer.download.nvidia.com (developer.download.nvidia.com)|152.195.19.142|:443... 

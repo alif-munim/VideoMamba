@@ -177,7 +177,7 @@ def get_args():
                         help='resume from checkpoint')
     parser.add_argument('--auto_resume', action='store_true')
     parser.add_argument('--no_auto_resume', action='store_false', dest='auto_resume')
-    parser.set_defaults(auto_resume=True)
+    parser.set_defaults(auto_resume=False)
 
     parser.add_argument('--save_ckpt', action='store_true')
     parser.add_argument('--no_save_ckpt', action='store_false', dest='save_ckpt')
@@ -185,6 +185,8 @@ def get_args():
 
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
+    parser.add_argument('--resume_step', default=0, type=int, metavar='N',
+                        help='start step')
     parser.add_argument('--test_best', action='store_true',
                         help='Whether test the best model')
     parser.add_argument('--eval', action='store_true',
@@ -210,7 +212,12 @@ def get_args():
     parser.add_argument('--enable_deepspeed', action='store_true', default=False)
     parser.add_argument('--bf16', default=False, action='store_true')
 
+    
     parser.add_argument('--force_single_gpu', action='store_true', default=False)
+    parser.add_argument('--log_mae', action='store_true', default=False)
+    parser.add_argument('--save_freq', default=1000, type=int)
+    parser.add_argument('--grad_accumulation_steps', default=1, type=int)
+    parser.add_argument('--legacy_ckpt', default=False, action='store_true') # use the old (epoch only) checkpointing mechanism
 
     known_args, _ = parser.parse_known_args()
 
@@ -549,6 +556,7 @@ def main(args, ds_init):
             args=args, model=model, model_parameters=optimizer_params, dist_init_required=not args.distributed,
         )
 
+        model.gradient_accumulation_steps = args.grad_accumulation_steps
         print("model.gradient_accumulation_steps() = %d" % model.gradient_accumulation_steps())
         assert model.gradient_accumulation_steps() == args.update_freq
     else:
@@ -566,6 +574,8 @@ def main(args, ds_init):
             dtype = torch.bfloat16 if args.bf16 else torch.float16
             amp_autocast = torch.cuda.amp.autocast(dtype=dtype)
             loss_scaler = NativeScaler()
+            model.gradient_accumulation_steps = args.grad_accumulation_steps
+            print("model.gradient_accumulation_steps = %d" % model.gradient_accumulation_steps)
 
     print("Use step level LR scheduler!")
     lr_schedule_values = utils.cosine_scheduler(
@@ -628,7 +638,7 @@ def main(args, ds_init):
             log_writer.set_step(epoch * num_training_steps_per_epoch * args.update_freq)
         train_stats = train_one_epoch(
             model, criterion, data_loader_train, optimizer,
-            device, epoch, loss_scaler, amp_autocast, args.clip_grad, model_ema,
+            device, epoch, loss_scaler, amp_autocast, args, args.clip_grad, args.resume_step, args.save_freq, model_ema,
             log_writer=log_writer, start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values,
             num_training_steps_per_epoch=num_training_steps_per_epoch, update_freq=args.update_freq,
@@ -641,7 +651,7 @@ def main(args, ds_init):
         
         if data_loader_val is not None:
             test_stats = validation_one_epoch(
-                data_loader_val, model, device, amp_autocast,
+                data_loader_val, model, device, amp_autocast, args,
                 ds=args.enable_deepspeed, no_amp=args.no_amp, bf16=args.bf16,
             )
             timestep = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -656,6 +666,9 @@ def main(args, ds_init):
             print(f'Min Val Loss: {min_val_loss:.2f}')
             if log_writer is not None:
                 log_writer.update(val_loss=test_stats['loss'], head="perf", step=epoch)
+
+                if args.log_mae:
+                    log_writer.update(val_mae=test_stats['mae'], head="perf", step=epoch)
 
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                          **{f'val_{k}': v for k, v in test_stats.items()},

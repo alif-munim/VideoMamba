@@ -162,6 +162,7 @@ def get_args():
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
 
     parser.add_argument('--force_single_gpu', action='store_true', default=False)
+    parser.add_argument('--save_freq', default=1000, type=int)
 
     return parser.parse_args()
 

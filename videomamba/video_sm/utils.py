@@ -51,24 +51,34 @@ class SmoothedValue(object):
 
     @property
     def median(self):
+        if not self.deque:  # Check if the deque is empty
+            return float('nan')  # or some other appropriate default value
         d = torch.tensor(list(self.deque))
         return d.median().item()
 
     @property
     def avg(self):
+        if not self.deque:  # Check if the deque is empty
+            return float('nan')  # or some other appropriate default value
         d = torch.tensor(list(self.deque), dtype=torch.float32)
         return d.mean().item()
 
     @property
     def global_avg(self):
+        if self.count == 0:
+            return float('nan')  # or return 0 if that's more appropriate
         return self.total / self.count
 
     @property
     def max(self):
+        if not self.deque:  # Check if the deque is empty
+            return float('nan')  # or some other appropriate default value
         return max(self.deque)
 
     @property
     def value(self):
+        if not self.deque:  # Check if the deque is empty
+            return float('nan')  # or some other appropriate default value
         return self.deque[-1]
 
     def __str__(self):
@@ -480,7 +490,7 @@ def cosine_scheduler(base_value, final_value, epochs, niter_per_ep, warmup_epoch
     return schedule
 
 
-def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, model_ema=None, model_name=None):
+def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, step=None, model_ema=None, model_name=None):
     output_dir = Path(args.output_dir)
     if model_name is None:
         model_name = str(epoch)
@@ -491,6 +501,7 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, mo
                 'model': model_without_ddp.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch,
+                'step': step,
                 'scaler': loss_scaler.state_dict(),
                 'args': args,
             }
@@ -540,7 +551,12 @@ def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, mode
             print("Resume checkpoint %s" % args.resume)
             if 'optimizer' in checkpoint and 'epoch' in checkpoint:
                 optimizer.load_state_dict(checkpoint['optimizer'])
-                args.start_epoch = checkpoint['epoch'] + 1
+                if args.legacy_ckpt:
+                    args.start_epoch = checkpoint['epoch'] + 1
+                else:
+                    args.start_epoch = checkpoint['epoch']
+                    args.resume_step = checkpoint['step'] + 1
+                print(f"Resuming from epoch {args.start_epoch} and step {args.resume_step}")
                 if hasattr(args, 'model_ema') and args.model_ema:
                     _load_checkpoint_for_ema(model_ema, checkpoint['model_ema'])
                 if 'scaler' in checkpoint:

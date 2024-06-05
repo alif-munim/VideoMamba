@@ -147,7 +147,7 @@ if not SKIP_CUDA_BUILD:
                     + cc_flag
                 ),
             },
-            include_dirs=[this_dir],
+            include_dirs=[this_dir, os.path.join(CUDA_HOME, 'include')],
         )
     )
 

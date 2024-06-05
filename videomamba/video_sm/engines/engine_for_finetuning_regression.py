@@ -8,6 +8,7 @@ import torch
 import torch.distributed as dist
 from timm.utils import ModelEma
 import utils
+import itertools
 
 
 def train_class_batch(model, samples, target, criterion):
@@ -26,8 +27,8 @@ def get_loss_scale_for_deepspeed(model):
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, loss_scaler, amp_autocast, max_norm: float = 0,
-                    model_ema: Optional[ModelEma] = None, log_writer=None,
+                    device: torch.device, epoch: int, loss_scaler, amp_autocast, args, max_norm: float = 0,
+                    resume_step=0, save_freq=1000, model_ema: Optional[ModelEma] = None, log_writer=None,
                     start_steps=None, lr_schedule_values=None, wd_schedule_values=None,
                     num_training_steps_per_epoch=None, update_freq=None, no_amp=False, bf16=False):
     model.train(True)
@@ -43,11 +44,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     else:
         optimizer.zero_grad()
 
-    for data_iter_step, (samples, targets, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    data_iter = itertools.islice(enumerate(metric_logger.log_every(data_loader, print_freq, header)), resume_step, None)
+
+    for data_iter_step, (samples, targets, _, _) in data_iter:
         step = data_iter_step // update_freq
         if step >= num_training_steps_per_epoch:
             continue
-        it = start_steps + step  # global training iteration
+
+        total_previous_steps = args.resume_step + (args.start_epoch * num_training_steps_per_epoch)
+        it = total_previous_steps + data_iter_step  # global training iteration + prev steps
         # Update LR & WD for the first acc
         if lr_schedule_values is not None or wd_schedule_values is not None and data_iter_step % update_freq == 0:
             for i, param_group in enumerate(optimizer.param_groups):
@@ -65,14 +70,22 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         if loss_scaler is None:
             if not no_amp:
                 samples = samples.bfloat16() if bf16 else samples.half()
-            loss, output = train_class_batch(
-                model, samples, targets, criterion)
+            loss, output = train_class_batch(model, samples, targets, criterion)
+            if args.log_mae:
+                output = output.detach()
+                with torch.no_grad():
+                    mae_loss = torch.nn.L1Loss()(output, targets)
         else:
             with amp_autocast:
-                loss, output = train_class_batch(
-                    model, samples, targets, criterion)
+                loss, output = train_class_batch(model, samples, targets, criterion)
+                if args.log_mae:
+                    output = output.detach()
+                    with torch.no_grad():
+                        mae_loss = torch.nn.L1Loss()(output, targets)
 
         loss_value = loss.item()
+        if args.log_mae:
+            mae_value = mae_loss.item()
 
         # loss_list = [torch.zeros_like(loss) for _ in range(dist.get_world_size())]
         # dist.all_gather(loss_list, loss)
@@ -128,6 +141,13 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
         torch.cuda.synchronize()
 
+        if (data_iter_step + 1) % save_freq == 0:
+            model_without_ddp = model
+            utils.save_model(
+                args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
+                loss_scaler=loss_scaler, step=step, epoch=epoch, model_name='latest', model_ema=model_ema)
+            print(f"Saved model to checkpoint-latest.pth at step {data_iter_step}.")
+
         metric_logger.update(loss=loss_value)
         metric_logger.update(loss_scale=loss_scale_value)
         min_lr = 10.
@@ -145,6 +165,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         metric_logger.update(weight_decay=weight_decay_value)
         metric_logger.update(grad_norm=grad_norm)
 
+        if args.log_mae:
+            metric_logger.update(mae=mae_value)
+
         if log_writer is not None:
             log_writer.update(loss=loss_value, head="loss")
             log_writer.update(loss_scale=loss_scale_value, head="opt")
@@ -153,7 +176,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             log_writer.update(weight_decay=weight_decay_value, head="opt")
             log_writer.update(grad_norm=grad_norm, head="opt")
 
-            log_writer.set_step()
+            if args.log_mae:
+                log_writer.update(mae=mae_value, head="loss")
+
+            log_writer.set_step(it)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -162,8 +188,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def validation_one_epoch(data_loader, model, device, amp_autocast, ds=True, no_amp=False, bf16=False):
+def validation_one_epoch(data_loader, model, device, amp_autocast, args, ds=True, no_amp=False, bf16=False):
     criterion = torch.nn.MSELoss()
+
+    if args.log_mae:
+        mae_criterion = torch.nn.L1Loss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Val:'
@@ -183,15 +212,23 @@ def validation_one_epoch(data_loader, model, device, amp_autocast, ds=True, no_a
                 videos = videos.bfloat16() if bf16 else videos.half()
             output = model(videos)[:, 0]
             loss = criterion(output, target)
+            if args.log_mae:
+                mae_loss = mae_criterion(output, target)
         else:
             with amp_autocast:
                 output = model(videos)[:, 0]
                 loss = criterion(output, target)
+                if args.log_mae:
+                    mae_loss = mae_criterion(output, target)
 
         metric_logger.update(loss=loss.item())
+        if args.log_mae:
+            metric_logger.update(mae=mae_loss.item())
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print('* loss {losses.global_avg:.3f}'.format(losses=metric_logger.loss))
+    if args.log_mae:
+        print('* mae {mae_values.global_avg:.3f}'.format(mae_values=metric_logger.mae))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 

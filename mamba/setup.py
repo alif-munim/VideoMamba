@@ -67,6 +67,12 @@ def get_cuda_bare_metal_version(cuda_dir):
     release_idx = output.index("release") + 1
     bare_metal_version = parse(output[release_idx].split(",")[0])
 
+    if bare_metal_version < Version("11.4"):
+        raise RuntimeError(
+            f"{PACKAGE_NAME} is only supported on CUDA 11.4 and above.  "
+            "Note: make sure nvcc has a supported version by running nvcc -V."
+        )
+
     return raw_output, bare_metal_version
 
 
@@ -109,7 +115,7 @@ if not SKIP_CUDA_BUILD:
     cc_flag.append("arch=compute_70,code=sm_70")
     cc_flag.append("-gencode")
     cc_flag.append("arch=compute_80,code=sm_80")
-    if bare_metal_version >= Version("11.8"):
+    if bare_metal_version >= Version("11.4"):
         cc_flag.append("-gencode")
         cc_flag.append("arch=compute_90,code=sm_90")
 
@@ -179,7 +185,8 @@ def get_wheel_url():
     torch_version_raw = parse(torch.__version__)
     # For CUDA 11, we only compile for CUDA 11.8, and for CUDA 12 we only compile for CUDA 12.2
     # to save CI time. Minor versions should be compatible.
-    torch_cuda_version = parse("11.8") if torch_cuda_version.major == 11 else parse("12.2")
+    # torch_cuda_version = parse("11.8") if torch_cuda_version.major == 11 else parse("12.2")
+    torch_cuda_version = parse("11.4") if torch_cuda_version.major == 11 else parse("12.2")
     python_version = f"cp{sys.version_info.major}{sys.version_info.minor}"
     platform_name = get_platform()
     mamba_ssm_version = get_package_version()
