@@ -21,7 +21,7 @@ import math
 from mamba_ssm.modules.mamba_simple import Mamba
 
 try:
-    from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
+    from mamba_ssm.ops.triton.layer_norm import RMSNorm, layer_norm_fn, rms_norm_fn
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
@@ -108,6 +108,12 @@ def create_block(
         ssm_cfg = {}
     mixer_cls = partial(Mamba, layer_idx=layer_idx, bimamba=bimamba, **ssm_cfg, **factory_kwargs)
     norm_cls = partial(nn.LayerNorm if not rms_norm else RMSNorm, eps=norm_epsilon)
+    # norm_cls = partial(RMSNorm if rms_norm else nn.LayerNorm, eps=norm_epsilon) # Claude edit
+    # if rms_norm:
+    #     norm_cls = partial(RMSNorm, eps=norm_epsilon)
+    # else:
+    #     norm_cls = partial(nn.LayerNorm, eps=norm_epsilon)
+    
     block = Block(
         d_model,
         mixer_cls,
