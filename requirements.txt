@@ -1,4 +1,4 @@
-apex #0.1
+# apex==0.1 # install from source (github)
 av==11.0.0
 decord==0.6.0
 deepspeed==0.13.1

@@ -10,6 +10,15 @@ from timm.utils import ModelEma
 import utils
 import itertools
 
+torch.autograd.set_detect_anomaly(True)
+
+def log_gradients(model):
+    for name, parameter in model.named_parameters():
+        if parameter.grad is not None:
+            max_grad = torch.max(parameter.grad)
+            min_grad = torch.min(parameter.grad)
+            if torch.isnan(max_grad) or torch.isnan(min_grad):
+                print(f"NaN gradient at {name}")
 
 def train_class_batch(model, samples, target, criterion):
     outputs = model(samples)[:, 0]
@@ -46,29 +55,39 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
     data_iter = itertools.islice(enumerate(metric_logger.log_every(data_loader, print_freq, header)), resume_step, None)
 
+    train_nan_counter = 0
+    loss_nan_counter = 0
+
     for data_iter_step, (samples, targets, _, _) in data_iter:
         step = data_iter_step // update_freq
         if step >= num_training_steps_per_epoch:
             continue
 
-        total_previous_steps = args.resume_step + (args.start_epoch * num_training_steps_per_epoch)
+        total_previous_steps = args.resume_step + (epoch * num_training_steps_per_epoch) # Need to fix this because we only use resume steps at the start (?)
         it = total_previous_steps + data_iter_step  # global training iteration + prev steps
+        # data_iter_step is basically the resume_step (initially), which is taken into account in total_previous_steps
+        # it = total_previous_steps 
         # Update LR & WD for the first acc
         if lr_schedule_values is not None or wd_schedule_values is not None and data_iter_step % update_freq == 0:
             for i, param_group in enumerate(optimizer.param_groups):
                 if lr_schedule_values is not None:
                     if "lr_scale" in param_group:
-                        param_group["lr"] = lr_schedule_values[it] * param_group["lr_scale"]
+                        param_group["lr"] = lr_schedule_values[it] * param_group["lr_scale"] * args.scale_lr
                     else:
-                        param_group["lr"] = lr_schedule_values[it]
+                        param_group["lr"] = lr_schedule_values[it] * args.scale_lr
                 if wd_schedule_values is not None and param_group["weight_decay"] > 0:
                     param_group["weight_decay"] = wd_schedule_values[it]
 
         samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True).to(torch.float32)
 
+        if torch.isnan(samples).any() or torch.isnan(targets).any():
+            train_nan_counter += 1
+            print(f"VideoMamba (train): {train_nan_counter} NaN detected in samples or targets. Skipping.")
+            continue
+
         if loss_scaler is None:
-            if not no_amp:
+            if not no_amp and not args.high_precision:
                 samples = samples.bfloat16() if bf16 else samples.half()
             loss, output = train_class_batch(model, samples, targets, criterion)
             if args.log_mae:
@@ -99,8 +118,14 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         #     sys.exit(1)
 
         if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-            sys.exit(1)
+            if args.skip_nan:
+                loss_nan_counter += 1
+                print(f"Loss is {loss_value}, skipping batch ({loss_nan_counter} skipped)")
+                continue
+            else:
+                print("Loss is {}, stopping training".format(loss_value))
+                sys.exit(1)
+                
 
         if loss_scaler is None:
             loss /= update_freq
@@ -133,6 +158,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                 if (data_iter_step + 1) % update_freq == 0:
                     if max_norm is not None:
                         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+                    log_gradients(model)
                     optimizer.step()
                     optimizer.zero_grad()
                     if model_ema is not None:
@@ -145,8 +171,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
             model_without_ddp = model
             utils.save_model(
                 args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
-                loss_scaler=loss_scaler, step=step, epoch=epoch, model_name='latest', model_ema=model_ema)
-            print(f"Saved model to checkpoint-latest.pth at step {data_iter_step}.")
+                loss_scaler=loss_scaler, step=data_iter_step, epoch=epoch, model_name='latest', model_ema=model_ema)
+            print(f"Saved model to checkpoint-{data_iter_step}.pth at step {data_iter_step}.")
 
         metric_logger.update(loss=loss_value)
         metric_logger.update(loss_scale=loss_scale_value)
@@ -199,6 +225,7 @@ def validation_one_epoch(data_loader, model, device, amp_autocast, args, ds=True
 
     # switch to evaluation mode
     model.eval()
+    val_nan_counter = 0
 
     for batch in metric_logger.log_every(data_loader, 10, header):
         videos = batch[0]
@@ -206,9 +233,14 @@ def validation_one_epoch(data_loader, model, device, amp_autocast, args, ds=True
         videos = videos.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True).to(torch.float32)
 
+        if torch.isnan(videos).any() or torch.isnan(target).any():
+            val_nan_counter += 1
+            print("VideoMamba (val): {val_nan_counter} NaN detected in videos or target. Skipping.")
+            continue
+
         # compute output
         if ds:
-            if not no_amp:
+            if not no_amp and not args.high_precision:
                 videos = videos.bfloat16() if bf16 else videos.half()
             output = model(videos)[:, 0]
             loss = criterion(output, target)
@@ -255,7 +287,7 @@ def final_test(data_loader, model, device, file, amp_autocast, ds=True, no_amp=F
 
         # compute output
         if ds:
-            if not no_amp:
+            if not no_amp and not args.high_precision:
                 videos = videos.bfloat16() if bf16 else videos.half()
             output = model(videos)[:, 0]
             loss = criterion(output, target)

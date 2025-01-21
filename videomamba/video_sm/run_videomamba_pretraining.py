@@ -164,6 +164,11 @@ def get_args():
     parser.add_argument('--force_single_gpu', action='store_true', default=False)
     parser.add_argument('--save_freq', default=1000, type=int)
 
+    # Additional arguments
+    parser.add_argument('--legacy_ckpt', default=True, action='store_true', help='Use legacy checkpoint format')
+    parser.add_argument('--reset_ckpt', default=False, action='store_true',
+                        help='use the old (epoch only) checkpointing mechanism')
+
     return parser.parse_args()
 
 

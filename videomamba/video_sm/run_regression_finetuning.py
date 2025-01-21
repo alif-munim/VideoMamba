@@ -71,17 +71,17 @@ def get_args():
         weight decay. We use a cosine schedule for WD and using a larger decay by
         the end of training improves performance for ViTs.""")
 
-    parser.add_argument('--lr', type=float, default=1e-3, metavar='LR',
-                        help='learning rate (default: 1e-3)')
+    parser.add_argument('--lr', type=float, default=1e-5, metavar='LR',
+                        help='learning rate (default: 1e-3)') # change to 1e-5 (default 1e-3)
     parser.add_argument('--layer_decay', type=float, default=0.75)
 
-    parser.add_argument('--warmup_lr', type=float, default=1e-6, metavar='LR',
-                        help='warmup learning rate (default: 1e-6)')
-    parser.add_argument('--min_lr', type=float, default=1e-6, metavar='LR',
+    parser.add_argument('--warmup_lr', type=float, default=1e-8, metavar='LR',
+                        help='warmup learning rate (default: 1e-6)') # change to 1e-8 (default 1e-6)
+    parser.add_argument('--min_lr', type=float, default=1e-8, metavar='LR', # change to 1e-8 (default 1e-6)
                         help='lower lr bound for cyclic schedulers that hit 0 (1e-6)')
 
-    parser.add_argument('--warmup_epochs', type=int, default=5, metavar='N',
-                        help='epochs to warmup LR, if scheduler supports')
+    parser.add_argument('--warmup_epochs', type=int, default=10, metavar='N',
+                        help='epochs to warmup LR, if scheduler supports') # change to 10 (default 5)
     parser.add_argument('--warmup_steps', type=int, default=-1, metavar='N',
                         help='num of steps to warmup LR, will overload warmup_epochs if set > 0')
 
@@ -215,9 +215,25 @@ def get_args():
     
     parser.add_argument('--force_single_gpu', action='store_true', default=False)
     parser.add_argument('--log_mae', action='store_true', default=False)
-    parser.add_argument('--save_freq', default=1000, type=int)
     parser.add_argument('--grad_accumulation_steps', default=1, type=int)
-    parser.add_argument('--legacy_ckpt', default=False, action='store_true') # use the old (epoch only) checkpointing mechanism
+    
+    parser.add_argument('--legacy_ckpt', default=False, action='store_true',
+                        help='use the old (epoch only) checkpointing mechanism')
+    parser.add_argument('--reset_ckpt', default=False, action='store_true',
+                        help='use the old (epoch only) checkpointing mechanism')
+    parser.add_argument('--max_ckpt_keep', default=5, type=int)
+    parser.add_argument('--save_freq', default=1000, type=int)
+
+    parser.add_argument('--clear_grads', action='store_true', default=False,
+                        help='clear gradients if previous run had NaNs')
+    parser.add_argument('--reset_nan', action='store_true', default=False,
+                        help='reset NaN weights if previous run had NaNs')
+    parser.add_argument('--skip_nan', action='store_true', default=False,
+                        help='skip nan losses instead of stopping training')
+    parser.add_argument('--scale_lr', type=float, default=1, 
+                         help='scale lr manually (in addition to scheduler)')
+    parser.add_argument('--high_precision', action='store_true', default=False,
+                        help='use float32 instead of float16')
 
     known_args, _ = parser.parse_known_args()
 
@@ -290,7 +306,7 @@ def main(args, ds_init):
         log_writer = None
 
     if args.num_sample > 1:
-        collate_func = partial(multiple_samples_collate, fold=False)
+        collate_func = partial(multiple_samples_collate_filter, fold=False)
     else:
         collate_func = None
 
@@ -505,6 +521,22 @@ def main(args, ds_init):
 
     model.to(device)
 
+    
+    def reset_nan_weights(model):
+        with torch.no_grad():
+            nan_inf_weights_counter = 0
+            for param in model.parameters():
+                if torch.isnan(param).any() or torch.isinf(param).any():
+                    nan_weights_counter += 1
+                    print(f"Found nan weights. Resetting ({nan_inf_weights_counter}).")
+                    param.data.copy_(torch.randn_like(param) * 0.01) 
+            if nan_inf_weights_counter == 0:
+                print(f"No NaNs or Infs found in model weights!")
+
+    if args.reset_nan:
+        print(f"Resetting NaN/Inf parameters in model...")
+        reset_nan_weights(model)
+
     model_ema = None
     if args.model_ema:
         model_ema = ModelEma(
@@ -522,9 +554,9 @@ def main(args, ds_init):
 
     total_batch_size = args.batch_size * args.update_freq * utils.get_world_size()
     num_training_steps_per_epoch = len(dataset_train) // total_batch_size
-    args.lr = args.lr * total_batch_size * args.num_sample / 256
-    args.min_lr = args.min_lr * total_batch_size * args.num_sample / 256
-    args.warmup_lr = args.warmup_lr * total_batch_size * args.num_sample / 256
+    args.lr = args.lr * total_batch_size * args.num_sample / 256 * args.grad_accumulation_steps
+    args.min_lr = args.min_lr * total_batch_size * args.num_sample / 256 * args.grad_accumulation_steps
+    args.warmup_lr = args.warmup_lr * total_batch_size * args.num_sample / 256 * args.grad_accumulation_steps
     print("LR = %.8f" % args.lr)
     print("Batch size = %d" % total_batch_size)
     print("Repeated sample = %d" % args.num_sample)
@@ -569,9 +601,16 @@ def main(args, ds_init):
             get_num_layer=assigner.get_layer_id if assigner is not None else None, 
             get_layer_scale=assigner.get_scale if assigner is not None else None)
 
+        if args.clear_grads:
+            print(f"Clearing gradients from previous runs...")
+            optimizer.zero_grad(set_to_none=True)
+
         if not args.no_amp:
             print(f"Use bf16: {args.bf16}")
-            dtype = torch.bfloat16 if args.bf16 else torch.float16
+            if args.high_precision:
+                dtype = torch.float32
+            else:
+                dtype = torch.bfloat16 if args.bf16 else torch.float16
             amp_autocast = torch.cuda.amp.autocast(dtype=dtype)
             loss_scaler = NativeScaler()
             model.gradient_accumulation_steps = args.grad_accumulation_steps
@@ -644,6 +683,8 @@ def main(args, ds_init):
             num_training_steps_per_epoch=num_training_steps_per_epoch, update_freq=args.update_freq,
             no_amp=args.no_amp, bf16=args.bf16
         )
+        args.resume_step = 0 # start from step zero for remaining epochs
+        
         if args.output_dir and args.save_ckpt:
             utils.save_model(
                 args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,

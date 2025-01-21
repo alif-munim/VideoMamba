@@ -313,9 +313,24 @@ def is_main_process():
     return get_rank() == 0
 
 
-def save_on_master(obj, ckpt_path):
+def clean_old_checkpoints(directory, max_keep=5):
+
+    checkpoints = [file for file in os.listdir(directory) if file.endswith('.pth')]
+    if len(checkpoints) <= max_keep:
+        return
+
+    checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(directory, x)))
+
+    for checkpoint in checkpoints[:-max_keep]:
+        os.remove(os.path.join(directory, checkpoint))
+
+
+def save_on_master(args, obj, epoch, step, output_dir, ckpt_path):
     if is_main_process():
-        torch.save(obj, ckpt_path)
+        ckpt_name = f"checkpoint-epoch{epoch}-step{step}.pth"
+        save_path = os.path.join(output_dir, ckpt_name)
+        torch.save(obj, save_path)
+        clean_old_checkpoints(output_dir, args.max_ckpt_keep)
 
 
 def init_distributed_mode(args):
@@ -337,19 +352,19 @@ def init_distributed_mode(args):
         os.environ['LOCAL_RANK'] = str(args.gpu)
         os.environ['RANK'] = str(args.rank)
         os.environ['WORLD_SIZE'] = str(args.world_size)
-    # elif 'SLURM_PROCID' in os.environ:
-    #     args.rank = int(os.environ['SLURM_PROCID'])
-    #     args.gpu = int(os.environ['SLURM_LOCALID'])
-    #     args.world_size = int(os.environ['SLURM_NTASKS'])
-    #     os.environ['RANK'] = str(args.rank)
-    #     os.environ['LOCAL_RANK'] = str(args.gpu)
-    #     os.environ['WORLD_SIZE'] = str(args.world_size)
+    elif 'SLURM_PROCID' in os.environ:
+        args.rank = int(os.environ['SLURM_PROCID'])
+        args.gpu = int(os.environ['SLURM_LOCALID'])
+        args.world_size = int(os.environ['SLURM_NTASKS'])
+        os.environ['RANK'] = str(args.rank)
+        os.environ['LOCAL_RANK'] = str(args.gpu)
+        os.environ['WORLD_SIZE'] = str(args.world_size)
 
-    #     node_list = os.environ['SLURM_NODELIST']
-    #     addr = subprocess.getoutput(
-    #         f'scontrol show hostname {node_list} | head -n1')
-    #     if 'MASTER_ADDR' not in os.environ:
-    #         os.environ['MASTER_ADDR'] = addr
+        node_list = os.environ['SLURM_NODELIST']
+        addr = subprocess.getoutput(
+            f'scontrol show hostname {node_list} | head -n1')
+        if 'MASTER_ADDR' not in os.environ:
+            os.environ['MASTER_ADDR'] = addr
     elif 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
         args.rank = int(os.environ["RANK"])
         args.world_size = int(os.environ['WORLD_SIZE'])
@@ -509,15 +524,16 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, st
             if model_ema is not None:
                 to_save['model_ema'] = get_state_dict(model_ema)
 
-            save_on_master(to_save, checkpoint_path)
+            save_on_master(args, to_save, epoch, step, output_dir, checkpoint_path)
     else:
         client_state = {'epoch': epoch}
         if model_ema is not None:
             client_state['model_ema'] = get_state_dict(model_ema)
 
         local_save_dir = output_dir
-        tag_name = "checkpoint-%s" % model_name
+        tag_name = f"checkpoint-{model_name}-epoch{client_state['epoch']}"
         model.save_checkpoint(save_dir=local_save_dir, tag=tag_name, client_state=client_state)
+        clean_old_checkpoints(output_dir, max_keep=5)
 
 
 def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, model_ema=None):
@@ -553,10 +569,13 @@ def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, mode
                 optimizer.load_state_dict(checkpoint['optimizer'])
                 if args.legacy_ckpt:
                     args.start_epoch = checkpoint['epoch'] + 1
+                elif args.reset_ckpt:
+                    args.start_epoch = 0
+                    args.resume_step = 0
                 else:
                     args.start_epoch = checkpoint['epoch']
                     args.resume_step = checkpoint['step'] + 1
-                print(f"Resuming from epoch {args.start_epoch} and step {args.resume_step}")
+                    print(f"Resuming from epoch {args.start_epoch} and step {args.resume_step}")
                 if hasattr(args, 'model_ema') and args.model_ema:
                     _load_checkpoint_for_ema(model_ema, checkpoint['model_ema'])
                 if 'scaler' in checkpoint:
@@ -678,6 +697,47 @@ def multiple_samples_collate(batch, fold=False):
     inputs = [item for sublist in inputs for item in sublist]
     labels = [item for sublist in labels for item in sublist]
     video_idx = [item for sublist in video_idx for item in sublist]
+    inputs, labels, video_idx, extra_data = (
+        default_collate(inputs),
+        default_collate(labels),
+        default_collate(video_idx),
+        default_collate(extra_data),
+    )
+    if fold:
+        return [inputs], labels, video_idx, extra_data
+    else:
+        return inputs, labels, video_idx, extra_data
+
+def multiple_samples_collate_filter(batch, fold=False):
+    """
+    Collate function for repeated augmentation. Each instance in the batch has
+    more than one sample. Filters out samples containing NaN or Inf values.
+    
+    Args:
+        batch (tuple or list): data batch to collate.
+        
+    Returns:
+        (tuple): collated data batch.
+    """
+    filtered_batch = []
+    for samples, labels, video_idx, extra_data in batch:
+        # Flatten lists and filter out any instance with NaNs or Infs
+        clean_samples = [item for item in samples if not torch.isnan(item).any() and not torch.isinf(item).any()]
+        clean_labels = [item for item in labels if not torch.isnan(item).any() and not torch.isinf(item).any()]
+
+        if clean_samples and clean_labels:  # Ensure there are no empty samples or labels
+            filtered_batch.append((clean_samples, clean_id_labels, video_idx, extra_data))
+
+    if not filtered_batch:
+        raise ValueError("All data in batch was filtered out due to NaN or Inf values.")
+
+    # Unzip the filtered batch
+    inputs, labels, video_idx, extra_data = zip(*filtered_batch)
+    # Flatten lists
+    inputs = [item for sublist in inputs for item in sublist]
+    labels = [item for sublist in labels for item in sublist]
+    video_idx = [item for sublist in video_pair for item in sublist]
+    # Collate all the filtered and flattened items
     inputs, labels, video_idx, extra_data = (
         default_collate(inputs),
         default_collate(labels),
